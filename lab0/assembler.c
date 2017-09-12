@@ -20,12 +20,20 @@ enum
 	DONE, OK, EMPTY_LINE
 };
 
+// Enumeration of opcodes, equivalent index to opcodes array
+enum OpcodeIndex
+{
+	ADD, AND, BR, HALT, JMP, JSR, JSRR, LDB, LDW, LEA, NOP, NOT, RET, LSHF, RSHFL,
+	RSHFA, RTI, STSB, STW, TRAP, XOR, ORIG, END, FILL
+};
+
+
 // Set of valid LC3 OPCODES
 static const char* const opcodes[] = { "ADD", "AND", "BR", "BRN", "BRZ", "BRP", "BRNZ", "BRZP", "BRNP", "BRNZP", "HALT", "JMP", "JSR", "JSRR", "LDB", "LDW",
-"LEA", "NOP", "NOT", "RET", "LSHF", "RSHFL", "RSHFA", "RTI", "STB", "STW", "TRAP", "XOR" };
-// Set of valid LC3 pseudo OPCODES
+"LEA", "NOP", "NOT", "RET", "LSHF", "RSHFL", "RSHFA", "RTI", "STB", "STW", "TRAP", "XOR", ".ORIG", ".END", ".FILL" };
 
-static const char* const pseudos[] = { ".ORIG", ".END", ".FILL" };
+
+
 // Set of reserved strings, (Invalid label names)
 static const char* const reservedNames[] = { "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "IN", "OUT", "GETC", "PUTS"};
 
@@ -37,9 +45,29 @@ int readAndParse(FILE *pInfile, char *pLine, char **pLabel, char
 	**pOpcode, char **pArg1, char **pArg2, char **pArg3, char **pArg4);
 int isOpcode(char *pStr);
 int validateLabel(char *pStr);
+int getOpcode(char *pStr);
+int validateArgs(char *lArg1, char *lArg2, char *lArg3, char *lArg4, int opCodeIndex);
+int buildInstruction(char *lArg1, char *lArg2, char *lArg3, char *lArg4, int opCodeIndex);
+
 
 void main(int argc, char *argv[])
 {
+	// Create variables for line parser
+	// obtained from http://users.ece.utexas.edu/~patt/15s.460N/labs/lab1/Lab1Functions.html
+	char lLine[MAX_LINE_LENGTH + 1], *lLabel, *lOpcode, *lArg1,
+		*lArg2, *lArg3, *lArg4;
+	int lRet = OK;
+
+	// Store machine code instruction to be written to output
+	int lInstr;
+	// Store initial memory address
+	int lOrig = 0;
+	// location counter, offset from lOrig (lOrig+lLocCount)
+	int lLocCount = 0;
+	// Maximum possible number of labels (assuming no invalid names)
+	int lLabelCount = 0;
+	// Store opcode index
+	int lOpcodeIndex;
 
 	// Check command line argument count
 	if (argc != 3)
@@ -62,21 +90,6 @@ void main(int argc, char *argv[])
 		exit(4);
 	}
 
-	// Create variables for line parser
-	// obtained from http://users.ece.utexas.edu/~patt/15s.460N/labs/lab1/Lab1Functions.html
-	char lLine[MAX_LINE_LENGTH + 1], *lLabel, *lOpcode, *lArg1,
-		*lArg2, *lArg3, *lArg4;
-	int lRet = OK;
-
-	// Store machine code instruction to be written to output
-	int lInstr;
-	// Store initial memory address
-	int lOrig = 0;
-	// location counter, offset from lOrig (lOrig+lLocCount)
-	int lLocCount = 0;
-	// Maximum possible number of labels (assuming no invalid names)
-	int lLabelCount = 0;
-
 	// First loop, determines starting memory location, and maximum possible number of labels
 	while (lRet != DONE)
 	{
@@ -89,7 +102,7 @@ void main(int argc, char *argv[])
 			if (lLocCount == 0)
 			{
 				// Check that first line of code is an .ORIG pseudoOP
-				if (strcmp(lOpcode, pseudos[0]) == 0)
+				if (strcmp(lOpcode, opcodes[ORIG]) == 0)
 				{
 					lOrig = toNum(lArg1);
 
@@ -169,6 +182,31 @@ void main(int argc, char *argv[])
 		}
 	}
 
+	// Third loop, parse assembly instructions
+	while (lRet != DONE)
+	{
+		lLabel = NULL;
+		lOpcode = NULL;
+		lArg1 = NULL;
+		lArg2 = NULL;
+		lArg3 = NULL;
+		lArg4 = NULL;
+		lInstr = 0;
+		lRet = readAndParse(source, lLine, &lLabel, &lOpcode, &lArg1, &lArg2, &lArg3, &lArg4);
+		if (lRet != DONE && lRet != EMPTY_LINE)
+		{
+			if (lOpcode != NULL)
+			{
+				lOpcodeIndex = getOpcode(lOpcode);
+				if (lOpcodeIndex != -1)
+				{
+					validateArgs(lArg1, lArg2, lArg3, lArg4, lOpcodeIndex);
+					lInstr = buildInstruction(lArg1, lArg2, lArg3, lArg4, lOpcodeIndex);
+					fprintf(output, "0x%.4X\n", lInstr);
+				}
+			}
+		}
+	}
 
 	fclose(source);
 	fclose(output);
@@ -299,18 +337,12 @@ int readAndParse(FILE * pInfile, char * pLine, char ** pLabel, char
 }
 /*
  * @brief checks if string is a valid LC-3 Opcode
- * returns 1 if valid, 2 if a pseudoOP, -1 if invalid, and 0 if NULL
+ * returns 1 if valid, -1 if invalid, and 0 if NULL
  */
 int isOpcode(char* pStr)
 {
 	// Check if pStr is NULL
 	if (pStr == NULL) return 0;
-
-	// Check if PseudoOP
-	for (int i = 0; i < sizeof(pseudos); i++)
-	{
-		if (strcmp(pStr, pseudos[i]) == 0) return 2;
-	}
 
 	// Check if OPCODE
 	for (int i = 0; i < sizeof(opcodes); i++)
@@ -356,3 +388,81 @@ int validateLabel(char* pStr)
 	return 1;
 }
 
+/*
+ * @ brief, returns the index of the instruction in the opcode[] array
+ * returns -1 if the passed string is not found in the array
+ */
+int getOpcode(char *pStr)
+{
+	for (int i = 0; i < sizeof(opcodes); i++)
+		if (strcmp(pStr, opcodes[i]) == 0) return i;
+
+	// Opcode not found, return -1
+	return -1;
+}
+
+/*
+ * @ brief, validates all of the arguments given an opcode index,
+ * program will exit with appropriate error code if invalid args are found
+ */
+validateArgs(char *lArg1, char *lArg2, char *lArg3, char *lArg4, int opCodeIndex)
+{
+	switch (opCodeIndex)
+	{
+	case ADD:
+	case AND:
+	case BR:
+	case HALT:
+	case JMP:
+	case JSR:
+	case JSRR:
+	case LDB:
+	case LDW: 
+	case LEA:
+	case NOP:
+	case NOT:
+	case RET:
+	case LSHF:
+	case RSHFL:
+	case RSHFA:
+	case RTI:
+	case STSB:
+	case STW:
+	case TRAP:
+	case XOR: 
+	case ORIG:
+	case END:
+	case FILL:
+	}
+}
+
+int buildInstruction(char *lArg1, char *lArg2, char *lArg3, char *lArg4, int opCodeIndex)
+{
+	switch (opCodeIndex)
+	{
+	case ADD:
+	case AND:
+	case BR:
+	case HALT:
+	case JMP:
+	case JSR:
+	case JSRR:
+	case LDB:
+	case LDW: 
+	case LEA:
+	case NOP:
+	case NOT:
+	case RET:
+	case LSHF:
+	case RSHFL:
+	case RSHFA:
+	case RTI:
+	case STSB:
+	case STW:
+	case TRAP:
+	case XOR: 
+	case ORIG:
+	case END:
+	case FILL:
+	}
+}
